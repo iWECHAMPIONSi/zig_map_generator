@@ -3,6 +3,8 @@ const Random = std.Random;
 const assert = std.debug.assert;
 const ArrayList = std.ArrayList;
 const StdErr = @import("std_err.zig").StdErr;
+const AutoHashMap = std.hash_map.AutoHashMapUnmanaged;
+const print = std.debug.print;
 
 pub var change_list: ArrayList(Tile) = ArrayList(Tile).empty;
 pub var sync_list: ArrayList(Tile) = ArrayList(Tile).empty;
@@ -10,16 +12,20 @@ pub var sync_list: ArrayList(Tile) = ArrayList(Tile).empty;
 pub const screen_width: i32 = 1100;
 pub const screen_height: i32 = 700;
 
-pub const map_width: i32 = 64;
-pub const map_height: i32 = 64;
+pub const map_width: i32 = 130;
+pub const map_height: i32 = 130;
 
 pub const mountain_seeds: i32 = map_width / 24;
 
+fn printCoords(func: []const u8, i: i32, o: i32) void {
+    print("[{s}] i: {}, o: {}\n", .{ func, i, o });
+}
+
+pub const TileBiome: type = enum(i8) {};
+
 pub const TileHeight: type = enum(i8) {
-    nil = -128,
     deep_water = -5,
     shallow_water = -4,
-
     deep_valley = -3,
     shallow_valley = -2,
     decline = -1,
@@ -28,6 +34,17 @@ pub const TileHeight: type = enum(i8) {
     low_hill = 2,
     tall_hill = 3,
     mountain = 4,
+
+    pub fn lowerHeight(self: TileHeight) TileHeight {
+        assert(@backingInt(self) > @backingInt(TileHeight.deep_valley));
+        return @fromBackingInt(@backingInt(self) - 1);
+    }
+
+    pub fn raiseHeight(self: TileHeight) TileHeight {
+        assert(@backingInt(self) > @backingInt(TileHeight.shallow_water));
+        assert(@backingInt(self) < @backingInt(TileHeight.mountain));
+        return @fromBackingInt(@backingInt(self) + 1);
+    }
 
     pub fn randHeights(rand: Random, lowest: TileHeight, highest: TileHeight, low_bias: ?i8, high_bias: ?i8) TileHeight {
         assert(@backingInt(lowest) >= @backingInt(TileHeight.deep_valley));
@@ -59,38 +76,26 @@ pub const TileHeight: type = enum(i8) {
     }
 
     pub fn eq(a: TileHeight, b: TileHeight) bool {
-        assert(a != .nil);
-        assert(b != .nil);
         return @backingInt(a) == @backingInt(b);
     }
 
     pub fn lt(a: TileHeight, b: TileHeight) bool {
-        assert(a != .nil);
-        assert(b != .nil);
         return @backingInt(a) < @backingInt(b);
     }
 
     pub fn lte(a: TileHeight, b: TileHeight) bool {
-        assert(a != .nil);
-        assert(b != .nil);
         return @backingInt(a) <= @backingInt(b);
     }
 
     pub fn gte(a: TileHeight, b: TileHeight) bool {
-        assert(a != .nil);
-        assert(b != .nil);
         return @backingInt(a) >= @backingInt(b);
     }
 
     pub fn gt(a: TileHeight, b: TileHeight) bool {
-        assert(a != .nil);
-        assert(b != .nil);
         return @backingInt(a) > @backingInt(b);
     }
 
     pub fn neq(a: TileHeight, b: TileHeight) bool {
-        assert(a != .nil);
-        assert(b != .nil);
         return @backingInt(a) != @backingInt(b);
     }
 };
@@ -126,41 +131,98 @@ pub const Tile: type = struct {
 };
 
 pub const HeightDict: type = struct {
-    deep_water: ArrayList(*Tile),
-    shallow_water: ArrayList(*Tile),
-    deep_valley: ArrayList(*Tile),
-    shallow_valley: ArrayList(*Tile),
-    decline: ArrayList(*Tile),
-    base: ArrayList(*Tile),
-    incline: ArrayList(*Tile),
-    low_hill: ArrayList(*Tile),
-    tall_hill: ArrayList(*Tile),
-    mountain: ArrayList(*Tile),
+    deep_water: AutoHashMap(usize, *Tile),
+    shallow_water: AutoHashMap(usize, *Tile),
+    deep_valley: AutoHashMap(usize, *Tile),
+    shallow_valley: AutoHashMap(usize, *Tile),
+    decline: AutoHashMap(usize, *Tile),
+    base: AutoHashMap(usize, *Tile),
+    incline: AutoHashMap(usize, *Tile),
+    low_hill: AutoHashMap(usize, *Tile),
+    tall_hill: AutoHashMap(usize, *Tile),
+    mountain: AutoHashMap(usize, *Tile),
 
     const Self = @This();
     pub fn init(allocator: std.mem.Allocator, map: *[map_height * map_width]Tile) StdErr!Self {
-        var base: ArrayList(*Tile) = ArrayList(*Tile).initCapacity(allocator, map.len) catch {
+        var base = AutoHashMap(usize, *Tile).empty;
+        base.ensureTotalCapacity(allocator, map_height * map_width) catch {
             return StdErr.MemoryAllocation;
         };
+        errdefer base.deinit(allocator);
+
         for (0..map.len) |index| {
-            base.appendAssumeCapacity(&map[index]);
+            base.putAssumeCapacityNoClobber(index, &map[index]);
         }
+
+        var deep_water = AutoHashMap(usize, *Tile).empty;
+        deep_water.ensureTotalCapacity(allocator, map_height * map_width) catch {
+            return StdErr.MemoryAllocation;
+        };
+        errdefer deep_water.deinit(allocator);
+
+        var shallow_water = AutoHashMap(usize, *Tile).empty;
+        shallow_water.ensureTotalCapacity(allocator, map_height * map_width) catch {
+            return StdErr.MemoryAllocation;
+        };
+        errdefer shallow_water.deinit(allocator);
+
+        var deep_valley = AutoHashMap(usize, *Tile).empty;
+        deep_valley.ensureTotalCapacity(allocator, map_height * map_width) catch {
+            return StdErr.MemoryAllocation;
+        };
+        errdefer deep_valley.deinit(allocator);
+
+        var shallow_valley = AutoHashMap(usize, *Tile).empty;
+        shallow_valley.ensureTotalCapacity(allocator, map_height * map_width) catch {
+            return StdErr.MemoryAllocation;
+        };
+        errdefer shallow_valley.deinit(allocator);
+
+        var decline = AutoHashMap(usize, *Tile).empty;
+        decline.ensureTotalCapacity(allocator, map_height * map_width) catch {
+            return StdErr.MemoryAllocation;
+        };
+        errdefer decline.deinit(allocator);
+
+        var incline = AutoHashMap(usize, *Tile).empty;
+        incline.ensureTotalCapacity(allocator, map_height * map_width) catch {
+            return StdErr.MemoryAllocation;
+        };
+        errdefer incline.deinit(allocator);
+
+        var low_hill = AutoHashMap(usize, *Tile).empty;
+        low_hill.ensureTotalCapacity(allocator, map_height * map_width) catch {
+            return StdErr.MemoryAllocation;
+        };
+        errdefer low_hill.deinit(allocator);
+
+        var tall_hill = AutoHashMap(usize, *Tile).empty;
+        tall_hill.ensureTotalCapacity(allocator, map_height * map_width) catch {
+            return StdErr.MemoryAllocation;
+        };
+        errdefer tall_hill.deinit(allocator);
+
+        var mountain = AutoHashMap(usize, *Tile).empty;
+        mountain.ensureTotalCapacity(allocator, map_height * map_width) catch {
+            return StdErr.MemoryAllocation;
+        };
+        errdefer mountain.deinit(allocator);
+
         return .{
-            .deep_water = .empty,
-            .shallow_water = .empty,
-            .deep_valley = .empty,
-            .shallow_valley = .empty,
-            .decline = .empty,
+            .deep_water = deep_water,
+            .shallow_water = shallow_water,
+            .deep_valley = deep_valley,
+            .shallow_valley = shallow_valley,
+            .decline = decline,
             .base = base,
-            .incline = .empty,
-            .low_hill = .empty,
-            .tall_hill = .empty,
-            .mountain = .empty,
+            .incline = incline,
+            .low_hill = low_hill,
+            .tall_hill = tall_hill,
+            .mountain = mountain,
         };
     }
 
     pub fn deinit(self: *Self, allocator: std.mem.Allocator) void {
-        self.base.clearAndFree(allocator);
         self.deep_water.deinit(allocator);
         self.shallow_water.deinit(allocator);
         self.deep_valley.deinit(allocator);
@@ -173,7 +235,7 @@ pub const HeightDict: type = struct {
         self.mountain.deinit(allocator);
     }
 
-    fn getList(self: *Self, val: TileHeight) *ArrayList(*Tile) {
+    pub fn getMap(self: *Self, val: TileHeight) *AutoHashMap(usize, *Tile) {
         switch (val) {
             .deep_water => {
                 return &self.deep_water;
@@ -205,40 +267,47 @@ pub const HeightDict: type = struct {
             .mountain => {
                 return &self.mountain;
             },
-            .nil => {
-                unreachable;
-            },
         }
-    }
-
-    fn search(list: *const ArrayList(*Tile), tile: *Tile) ?usize {
-        for (0..list.items.len, list.items) |i, t| {
-            if (t == tile) {
-                return i;
-            }
-        }
-        return null;
     }
 
     pub fn swap(self: *Self, allocator: std.mem.Allocator, map_b_tile: *Tile, new_val: TileHeight) StdErr!void {
-        assert(map_b_tile.val != new_val);
-        assert(map_b_tile.val != .nil);
-        assert(new_val != .nil);
-        const origin_list: *ArrayList(*Tile) = self.getList(map_b_tile.val);
-        if (search(origin_list, map_b_tile)) |_| {} else {
-            unreachable;
-        }
-        const index: usize = search(origin_list, map_b_tile) orelse unreachable;
-        const destination: *ArrayList(*Tile) = self.getList(new_val);
-        assert(search(destination, map_b_tile) == null);
-        destination.append(allocator, map_b_tile) catch {
-            return StdErr.MemoryAllocation;
-        };
-        _ = origin_list.swapRemove(index);
-        map_b_tile.val = new_val;
+        try self.internalSwap(map_b_tile, new_val);
+        // printCoords("swap", map_b_tile.i, map_b_tile.o);
         sync_list.append(allocator, .{ .i = map_b_tile.i, .o = map_b_tile.o, .val = new_val }) catch {
             return StdErr.MemoryAllocation;
         };
+    }
+
+    pub fn syncSwap(self: *Self, map_b_tile: *Tile, new_val: TileHeight) StdErr!void {
+        try self.internalSwap(map_b_tile, new_val);
+        // printCoords("syncSwap", map_b_tile.i, map_b_tile.o);
+    }
+
+    fn internalSwap(self: *Self, map_b_tile: *Tile, new_val: TileHeight) StdErr!void {
+        assert(map_b_tile.val != new_val);
+        const key: usize = @intCast(map_b_tile.o + map_b_tile.i * map_width);
+        const origin_list = self.getMap(map_b_tile.val);
+        assert(origin_list.contains(key));
+        const destination = self.getMap(new_val);
+        assert(!destination.contains(key));
+        destination.putAssumeCapacityNoClobber(key, map_b_tile);
+        _ = origin_list.remove(key);
+        map_b_tile.val = new_val;
+    }
+
+    pub fn getList(self: *Self, val: TileHeight) Iterator {
+        return .{ .iter = self.getMap(val).valueIterator() };
+    }
+};
+
+pub const Iterator = struct {
+    iter: AutoHashMap(usize, *Tile).ValueIterator,
+
+    const Self = @This();
+    pub fn next(self: *Self) ?*Tile {
+        const tile: ?**Tile = self.iter.next();
+        if (tile) |t| return t.*;
+        return null;
     }
 };
 
@@ -271,21 +340,17 @@ pub const MapSection: type = struct {
         };
     }
 
-    pub fn deltaTiles(self: *const Self, allocator: std.mem.Allocator, comp: *const fn (TileHeight, TileHeight) bool, comp_height: TileHeight) StdErr!ArrayList(*Tile) {
-        var changes: ArrayList(*Tile) = ArrayList(*Tile).empty;
-
+    pub fn deltaTiles(self: *const Self, allocator: std.mem.Allocator, comp: *const fn (TileHeight, TileHeight) bool, comp_height: TileHeight, delta_tiles: *ArrayList(*Tile)) StdErr!void {
         for (self.section, 0..) |tile, index| {
             if (index == 4) continue;
             if (tile) |t| {
                 if (comp(t.val, comp_height)) {
-                    changes.append(allocator, t) catch {
+                    delta_tiles.append(allocator, t) catch {
                         return StdErr.MemoryAllocation;
                     };
                 }
             }
         }
-
-        return changes;
     }
 };
 
@@ -312,13 +377,9 @@ pub const HeightMap: type = struct {
     }
 
     pub fn get(self: *Self, i: i32, o: i32) *Tile {
-        assert(i < map_height and o < map_width);
+        assert(i < map_height);
+        assert(o < map_width);
         return &self.map[@intCast(o + i * map_width)];
-    }
-
-    pub fn set(self: *Self, i: i32, o: i32, val: TileHeight) void {
-        assert(i < map_height and o < map_width);
-        self.map[@intCast(o + i * map_width)].val = val;
     }
 
     fn safeGet(self: *Self, i: i32, o: i32) ?*Tile {
@@ -329,7 +390,8 @@ pub const HeightMap: type = struct {
     }
 
     pub fn getSection(self: *Self, i: i32, o: i32) MapSection {
-        assert(i < map_height and o < map_width);
+        assert(i < map_height);
+        assert(o < map_width);
         return MapSection.init(
             self.safeGet(i - 1, o - 1),
             self.safeGet(i - 1, o),
@@ -343,22 +405,28 @@ pub const HeightMap: type = struct {
         );
     }
 
-    pub fn changeTile(allocator: std.mem.Allocator, i: i32, o: i32, verified: *ArrayList(*Tile), comp: *const fn (usize, usize) bool, comp_val: usize, new_val: TileHeight, dict_a: *HeightDict, map_b: *Self) StdErr!void {
-        assert(i < map_height and o < map_width);
-        if (map_b.get(i, o).val == new_val) return;
-        defer verified.*.deinit(allocator);
+    pub fn changeTile(allocator: std.mem.Allocator, i: i32, o: i32, verified: *ArrayList(*Tile), comp: *const fn (usize, usize) bool, comp_val: usize, new_val: TileHeight, dict_a: *HeightDict, map_b: *Self) StdErr!bool {
+        assert(i < map_height);
+        assert(o < map_width);
+        var changed = false;
+        defer verified.*.clearRetainingCapacity();
+        if (map_b.get(i, o).val == new_val) return changed;
         if (comp(verified.items.len, comp_val)) {
+            changed = true;
             try dict_a.swap(allocator, map_b.get(i, o), new_val);
         }
+        return changed;
     }
 
-    pub fn changeDeltaTiles(allocator: std.mem.Allocator, i: i32, o: i32, delta_tiles: *ArrayList(*Tile), new_val: TileHeight, dict_a: *HeightDict, map_b: *Self) StdErr!void {
-        assert(i < map_height and o < map_width);
-        defer delta_tiles.*.deinit(allocator);
+    pub fn changeDeltaTiles(allocator: std.mem.Allocator, delta_tiles: *ArrayList(*Tile), new_val: TileHeight, dict_a: *HeightDict, map_b: *Self) StdErr!bool {
+        var changed: bool = false;
+        defer delta_tiles.*.clearRetainingCapacity();
         for (delta_tiles.*.items) |tile| {
             const edited_tile: *Tile = map_b.get(tile.i, tile.o);
             if (new_val == edited_tile.val) continue;
+            changed = true;
             try dict_a.swap(allocator, edited_tile, new_val);
         }
+        return changed;
     }
 };
